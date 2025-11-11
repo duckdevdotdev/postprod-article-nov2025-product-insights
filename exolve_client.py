@@ -6,17 +6,17 @@ import os
 
 logger = logging.getLogger(__name__)
 
-
 class ExolveClient:
     def __init__(self):
         self.api_key = os.getenv("EXOLVE_API_KEY")
-        self.base_url = "https://app.exolve.ru/api/v1"
+        self.base_url = "https://api.exolve.ru/statistics/call-record/v1"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
 
     def get_recent_calls(self, hours_back: int = 1) -> List[Dict]:
+        """Получает список последних звонков"""
         try:
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=hours_back)
@@ -28,7 +28,7 @@ class ExolveClient:
             }
 
             response = requests.get(
-                f"{self.base_url}/statistics/calls",
+                "https://app.exolve.ru/api/v1/statistics/calls",
                 headers=self.headers,
                 params=params,
                 timeout=30
@@ -45,85 +45,105 @@ class ExolveClient:
             return []
 
     def get_call_transcript(self, call_id: str) -> Optional[str]:
+        """Получает транскрипцию звонка через POST /GetTranscribation"""
         try:
-            # Получение деталей звонка с расшифровкой
-            call_details_url = f"{self.base_url}/statistics/calls/{call_id}"
+            logger.info(f"Получение расшифровки для звонка {call_id}")
 
-            response = requests.get(call_details_url, headers=self.headers, timeout=30)
+            # POST запрос к endpoint GetTranscribation
+            transcript_url = f"{self.base_url}/GetTranscribation"
+
+            # Тело запроса с ID звонка
+            payload = {
+                "call_id": call_id
+            }
+
+            # Выполняем POST-запрос к API Exolve
+            response = requests.post(
+                transcript_url,
+                headers=self.headers,
+                json=payload,
+                timeout=30
+            )
 
             if response.status_code == 200:
-                call_data = response.json()
-                return self._extract_transcript(call_data)
+                transcript_data = response.json()
+                transcript_text = self._extract_transcript_from_response(transcript_data)
+
+                if transcript_text:
+                    logger.info(f"Получена расшифровка: {len(transcript_text)} символов")
+                    return transcript_text
+                else:
+                    logger.warning(f"Пустая расшифровка для звонка {call_id}")
+                    return None
             else:
-                logger.error(f"API Error for call {call_id}: {response.status_code} - {response.text}")
+                logger.error(f"API Error: {response.status_code} - {response.text}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error getting transcript for call {call_id}: {e}")
+            logger.error(f"Ошибка получения расшифровки: {e}")
             return None
 
-    def _extract_transcript(self, call_data: Dict) -> str:
-        """Извлекает расшифровку из данных звонка"""
-        # Попробуем разные возможные пути к расшифровке
-        transcript_paths = [
-            ["transcript"],
-            ["speech_analytics", "transcript"],
-            ["phrases"],
-            ["call_details", "transcript"],
-            ["result", "transcript"]
-        ]
+    def _extract_transcript_from_response(self, transcript_data: Dict) -> str:
+        """Извлекает текст транскрипции из ответа API GetTranscribation"""
+        try:
+            # Анализируем структуру ответа
+            logger.info(f"Структура ответа: {list(transcript_data.keys())}")
 
-        for path in transcript_paths:
-            current = call_data
-            try:
-                for key in path:
-                    current = current[key]
-                if current:
-                    if isinstance(current, list):
-                        return " ".join([phrase.get("text", "") for phrase in current if phrase.get("text")])
-                    elif isinstance(current, str):
-                        return current
-            except (KeyError, TypeError):
-                continue
+            # Пробуем разные возможные структуры ответа
+            possible_paths = [
+                ["text"],
+                ["transcript"],
+                ["transcription"],
+                ["result", "text"],
+                ["data", "text"],
+                ["call", "transcript"],
+                ["TranscribationText"],  # Возможное поле для текста транскрипции
+                ["TranscriptionText"],
+                ["Text"]
+            ]
 
-        # Если не нашли структурированную расшифровку, попробуем найти текстовые поля
-        transcript_text = self._find_text_fields(call_data)
-        if transcript_text:
-            return transcript_text
+            for path in possible_paths:
+                current = transcript_data
+                try:
+                    for key in path:
+                        current = current[key]
+                    if current and isinstance(current, str):
+                        logger.info(f"Транскрипция найдена по пути: {path}")
+                        return current.strip()
+                except (KeyError, TypeError):
+                    continue
 
-        logger.warning(f"No transcript found in call data. Available keys: {list(call_data.keys())}")
-        return ""
+            # Если это список фраз/сегментов
+            if isinstance(transcript_data, list):
+                phrases = []
+                for item in transcript_data:
+                    if isinstance(item, dict) and item.get("text"):
+                        phrases.append(item["text"])
+                    elif isinstance(item, str):
+                        phrases.append(item)
+                if phrases:
+                    return " ".join(phrases)
 
-    def _find_text_fields(self, data, depth=0, max_depth=3):
-        """Рекурсивно ищет текстовые поля в данных"""
-        if depth > max_depth:
+            # Сохраняем полный ответ для отладки
+            with open("transcribation_debug.json", "w", encoding="utf-8") as f:
+                import json
+                json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+
+            logger.warning(f"Не удалось извлечь транскрипцию. Полный ответ сохранен в transcribation_debug.json")
             return ""
 
-        transcript_parts = []
-
-        if isinstance(data, dict):
-            for key, value in data.items():
-                if isinstance(value, str) and len(value) > 50:  # Длинные текстовые поля
-                    if any(word in key.lower() for word in ['transcript', 'text', 'phrase', 'speech']):
-                        transcript_parts.append(value)
-                elif isinstance(value, (dict, list)):
-                    found = self._find_text_fields(value, depth + 1, max_depth)
-                    if found:
-                        transcript_parts.append(found)
-
-        elif isinstance(data, list):
-            for item in data:
-                found = self._find_text_fields(item, depth + 1, max_depth)
-                if found:
-                    transcript_parts.append(found)
-
-        return " ".join(transcript_parts) if transcript_parts else ""
+        except Exception as e:
+            logger.error(f"Ошибка извлечения транскрипции: {e}")
+            return ""
 
     def get_call_details(self, call_id: str) -> Optional[Dict]:
-        """Получает полную информацию о звонке для отладки"""
+        """Получает детальную информацию о звонке"""
         try:
-            call_details_url = f"{self.base_url}/statistics/calls/{call_id}"
-            response = requests.get(call_details_url, headers=self.headers, timeout=30)
+            response = requests.get(
+                f"https://app.exolve.ru/api/v1/statistics/calls/{call_id}",
+                headers=self.headers,
+                timeout=30
+            )
 
             if response.status_code == 200:
                 return response.json()
@@ -134,6 +154,39 @@ class ExolveClient:
         except Exception as e:
             logger.error(f"Error: {e}")
             return None
+
+    def test_api_connection(self) -> bool:
+        """Тестирует подключение к API"""
+        try:
+            response = requests.get(
+                "https://app.exolve.ru/api/v1/statistics/calls",
+                headers=self.headers,
+                params={"limit": 1},
+                timeout=10
+            )
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"API connection test failed: {e}")
+            return False
+
+    def get_available_transcripts(self, hours_back: int = 24) -> List[Dict]:
+        """Получает список звонков с доступными транскрипциями"""
+        calls = self.get_recent_calls(hours_back)
+        calls_with_transcripts = []
+
+        for call in calls:
+            call_id = call.get("id")
+            if call_id:
+                transcript = self.get_call_transcript(call_id)
+                if transcript and len(transcript) > 50:  # Минимум 50 символов
+                    calls_with_transcripts.append({
+                        "call_id": call_id,
+                        "transcript_length": len(transcript),
+                        "preview": transcript[:100] + "..." if len(transcript) > 100 else transcript,
+                        "call_data": call
+                    })
+
+        return calls_with_transcripts
 
 
 class ExolveWebhookProcessor:

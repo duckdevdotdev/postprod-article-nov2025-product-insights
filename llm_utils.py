@@ -19,7 +19,7 @@ class LLMProcessor:
             else:
                 return self._fallback_analysis(call_text)
         except Exception as e:
-            logger.error(f"Ошибка: {e}")
+            logger.error(f"Ошибка анализа звонка: {e}")
             return None
 
     def _call_yandex_gpt(self, call_text: str) -> Dict[str, Any]:
@@ -43,7 +43,7 @@ class LLMProcessor:
             "messages": [
                 {
                     "role": "system",
-                    "text": "Ты — маркетолог-аналитик, который анализирует звонки с клиентами."
+                    "text": "Ты — продуктовый аналитик, который анализирует обращения клиентов."
                 },
                 {
                     "role": "user",
@@ -52,19 +52,26 @@ class LLMProcessor:
             ]
         }
 
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-
-        result = response.json()
-        response_text = result["result"]["alternatives"][0]["message"]["text"]
-
         try:
-            return json.loads(response_text.strip())
-        except json.JSONDecodeError:
-            return self._fallback_analysis(response_text)
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
 
-    # В llm_utils.py нужно обновить метод _fallback_analysis:
-    def _fallback_analysis(text: str) -> Dict[str, Any]:
+            result = response.json()
+            response_text = result["result"]["alternatives"][0]["message"]["text"]
+
+            try:
+                return json.loads(response_text.strip())
+            except json.JSONDecodeError as e:
+                logger.error(f"Ошибка парсинга JSON: {e}")
+                logger.info(f"Ответ от API: {response_text}")
+                return self._fallback_analysis(response_text)
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса к Yandex GPT: {e}")
+            return self._fallback_analysis(call_text)
+
+    def _fallback_analysis(self, text: str) -> Dict[str, Any]:
+        """Фолбек анализ когда основной не сработал"""
         return {
             "main_problem": "Не удалось определить проблему",
             "key_fear": "Не удалось определить страх",
@@ -73,20 +80,18 @@ class LLMProcessor:
             "tags": ["неопределено"]
         }
 
-    def generate_creatives(self, analysis_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def generate_product_insights(self, analysis_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
-            from prompts import get_creatives_prompt
-
             if self.provider == "yandex":
-                return self._generate_with_yandex(analysis_data)
+                return self._generate_insights_with_yandex(analysis_data)
             else:
-                return self._generate_fallback_creatives(analysis_data)
+                return self._generate_fallback_insights(analysis_data)
         except Exception as e:
-            logger.error(f"Ошибка: {e}")
+            logger.error(f"Ошибка генерации инсайтов: {e}")
             return None
 
-    def _generate_with_yandex(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-        from prompts import get_creatives_prompt
+    def _generate_insights_with_yandex(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+        from prompts import get_product_insights_prompt
 
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         headers = {
@@ -94,7 +99,7 @@ class LLMProcessor:
             "Content-Type": "application/json"
         }
 
-        prompt = get_creatives_prompt(analysis_data)
+        prompt = get_product_insights_prompt(analysis_data)
 
         data = {
             "modelUri": f"gpt://{self.config['folder_id']}/{self.config['model']}",
@@ -106,7 +111,7 @@ class LLMProcessor:
             "messages": [
                 {
                     "role": "system",
-                    "text": "Ты — копирайтер для рекламных объявлений."
+                    "text": "Ты — продуктовый аналитик, который анализирует клиентские обращения для улучшения продукта."
                 },
                 {
                     "role": "user",
@@ -115,31 +120,47 @@ class LLMProcessor:
             ]
         }
 
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-
-        result = response.json()
-        response_text = result["result"]["alternatives"][0]["message"]["text"]
-
         try:
-            return json.loads(response_text.strip())
-        except json.JSONDecodeError:
-            return self._generate_fallback_creatives(analysis_data)
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
 
-    def _generate_fallback_creatives(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+            result = response.json()
+            response_text = result["result"]["alternatives"][0]["message"]["text"]
+
+            try:
+                return json.loads(response_text.strip())
+            except json.JSONDecodeError as e:
+                logger.error(f"Ошибка парсинга JSON инсайтов: {e}")
+                logger.info(f"Ответ от API: {response_text}")
+                return self._generate_fallback_insights(analysis_data)
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса для генерации инсайтов: {e}")
+            return self._generate_fallback_insights(analysis_data)
+
+    def _generate_fallback_insights(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Фолбек инсайты когда основной запрос не сработал"""
         main_problem = analysis_data.get("main_problem", "проблема")
-        phrases = analysis_data.get("original_phrases", [""])
+        key_fear = analysis_data.get("key_fear", "страх")
+        result_solution = analysis_data.get("result_solution", "решение")
 
         return {
-            "headlines": [
-                f"Решаем {main_problem.lower()}",
-                f"Больше нет {main_problem.lower()}",
-                phrases[0] if phrases else f"Решение для {main_problem.lower()}"
+            "product_insights": [
+                f"Клиенты сталкиваются с {main_problem.lower()}, что вызывает {key_fear.lower()}",
+                f"Пользователи хотят достичь: {result_solution.lower()}",
+                "Необходимо упростить процесс решения данной проблемы"
             ],
-            "ad_texts": [
-                f"Избавляем от {main_problem.lower()}. Проверенное решение.",
-                f"Клиенты говорят: '{phrases[0]}'. Мы знаем как помочь."
-            ]
+            "feature_suggestions": [
+                f"Добавить функцию для решения {main_problem.lower()}",
+                "Реализовать уведомления о статусе операций",
+                "Создать справочный раздел по частым проблемам"
+            ],
+            "ux_improvements": [
+                "Упростить навигацию в проблемной области",
+                "Добавить подсказки и инструкции для новых пользователей",
+                "Улучшить обратную связь о выполнении операций"
+            ],
+            "priority_level": "medium"
         }
 
 
@@ -148,6 +169,6 @@ def analyze_call_with_llm(call_text: str, provider: str = "yandex") -> Optional[
     return processor.analyze_call(call_text)
 
 
-def generate_creatives(analysis_data: Dict[str, Any], provider: str = "yandex") -> Optional[Dict[str, Any]]:
+def generate_product_insights(analysis_data: Dict[str, Any], provider: str = "yandex") -> Optional[Dict[str, Any]]:
     processor = LLMProcessor(provider)
-    return processor.generate_creatives(analysis_data)
+    return processor.generate_product_insights(analysis_data)

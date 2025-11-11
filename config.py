@@ -14,6 +14,6 @@ LLM_CONFIG = {
 }
 
 SHEETS_CONFIG = {
-    "credentials_file": "service_account.json",
+    "credentials_file": "service_account.json.example",
     "scope": ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 }
