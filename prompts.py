@@ -40,6 +40,7 @@ tags
 
 Если в тексте нет данных для какого-то поля — создай краткую корректную формулировку на основе доступной информации, не выдумывая новые детали."""
 
+
 def get_product_insights_prompt(analysis_data: dict) -> str:
     return f"""
 Ты — продуктовый аналитик. На основе анализа клиентского обращения сформулируй продуктовые инсайты и рекомендации для развития продукта.
@@ -66,6 +67,7 @@ def get_product_insights_prompt(analysis_data: dict) -> str:
 
 Используй реальные цитаты клиента из original_phrases для обоснования инсайтов.
 """
+
 
 def get_webhook_analysis_prompt(call_text: str) -> str:
     return get_analysis_prompt(call_text)  # Можно использовать тот же промпт или кастомизировать

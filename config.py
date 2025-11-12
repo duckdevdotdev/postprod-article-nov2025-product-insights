@@ -7,13 +7,8 @@ LLM_CONFIG = {
     "yandex": {
         "api_key": os.getenv("YANDEX_API_KEY"),
         "folder_id": os.getenv("YANDEX_FOLDER_ID"),
-        "model": "yandexgpt-lite",
-        "temperature": 0.3,
-        "max_tokens": 2000
+        "model": os.getenv("YANDEX_MODEL", "yandexgpt-lite"),
+        "temperature": float(os.getenv("YANDEX_TEMPERATURE", "0.3")),
+        "max_tokens": int(os.getenv("YANDEX_MAX_TOKENS", "2000")),
     }
-}
-
-SHEETS_CONFIG = {
-    "credentials_file": "service_account.json.example",
-    "scope": ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 }
